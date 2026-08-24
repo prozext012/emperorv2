@@ -322,11 +322,52 @@
     .top-page-item:last-child { border-bottom: none; }
     .top-page-count { font-weight: 800; color: var(--primary-dark); }
     .status-view-count { font-size: 0.7rem; color: var(--ink-faint); margin-top: 8px; text-align: center; font-weight: 600; }
+
+    /* ===== LOGIN SCREEN ===== */
+    #loginScreen {
+        position: fixed; inset: 0; z-index: 9999; background: var(--dark);
+        display: flex; align-items: center; justify-content: center; flex-direction: column;
+        padding: 24px; text-align: center;
+    }
+    #loginScreen .login-icon {
+        width: 64px; height: 64px; border-radius: 18px; background: var(--primary);
+        display: flex; align-items: center; justify-content: center; margin-bottom: 22px;
+    }
+    #loginScreen .login-icon svg { width: 32px; height: 32px; fill: #fff; }
+    #loginScreen h1 { color: #fff; font-size: 1.15rem; margin-bottom: 8px; justify-content: center; }
+    #loginScreen p { color: #a8a3bd; font-size: 0.82rem; margin-bottom: 28px; max-width: 280px; line-height: 1.5; }
+    #btnGoogleLogin {
+        display: flex; align-items: center; justify-content: center; gap: 10px;
+        background: #fff; color: #16132a; border: none; border-radius: 13px;
+        padding: 13px 22px; font-family: 'Inter', sans-serif; font-weight: 700; font-size: 0.86rem;
+        cursor: pointer; box-shadow: var(--shadow-md);
+    }
+    #btnGoogleLogin svg { width: 18px; height: 18px; }
+    #loginError { color: #ff8080; font-size: 0.78rem; margin-top: 16px; display: none; max-width: 280px; }
+    #loginLoading { color: #a8a3bd; font-size: 0.8rem; margin-top: 16px; display: none; }
+    #btnLogout {
+        position: fixed; top: 14px; right: 14px; z-index: 100; background: var(--light);
+        border: 1.5px solid var(--border); border-radius: 10px; padding: 8px 12px;
+        font-family: 'Inter', sans-serif; font-weight: 700; font-size: 0.72rem; color: var(--soft-red);
+        cursor: pointer; box-shadow: var(--shadow-sm);
+    }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
-<div class="container">
+<div id="loginScreen">
+    <div class="login-icon"><svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg></div>
+    <h1>Admin dixzSTORE</h1>
+    <p>Halaman ini khusus untuk admin. Masuk pakai akun Google yang terdaftar untuk melanjutkan.</p>
+    <button type="button" id="btnGoogleLogin">
+        <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l6-6C34.5 5.1 29.6 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21 21-9.4 21-21c0-1.4-.1-2.7-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l6-6C34.5 5.1 29.6 3 24 3c-7.5 0-14 4.1-17.7 10.2z"/><path fill="#4CAF50" d="M24 45c5.5 0 10.4-1.9 14.3-5.1l-6.6-5.4C29.6 36.4 27 37 24 37c-5.2 0-9.6-3.3-11.3-7.9l-6.6 5.1C9.9 40.9 16.4 45 24 45z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.2 4.2-4.1 5.6l6.6 5.4C41.4 35.6 45 30.4 45 24c0-1.4-.1-2.7-.4-3.5z"/></svg>
+        Masuk dengan Google
+    </button>
+    <p id="loginLoading">Memeriksa akun…</p>
+    <p id="loginError"></p>
+</div>
+<button type="button" id="btnLogout" style="display:none;">Keluar</button>
+<div class="container" id="adminContainer" style="display:none;">
 
     <div class="tab-page active" id="pageNotif">
         <div class="notif-header-row">
@@ -641,7 +682,7 @@
     </div>
 </div>
 
-<div class="bottom-nav">
+<div class="bottom-nav" id="bottomNav" style="display:none;">
     <div class="nav-btn active" id="navNotif">
         <svg viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
         Notif
@@ -752,6 +793,9 @@
         getFirestore, collection, addDoc, doc, setDoc, updateDoc, deleteDoc,
         onSnapshot, query, orderBy, getDocs, where, writeBatch, increment, limit
     } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+    import {
+        getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut
+    } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
 
     // Upload video status pakai Cloudinary (bukan Firebase Storage, karena Storage
     // di paket Spark/gratis sekarang wajib upgrade ke Blaze dulu buat diaktifkan).
@@ -803,6 +847,80 @@
     };
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
+
+    // ===== LOGIN ADMIN (Google Sign-In, cuma 1 email yang diizinkan) =====
+    const ALLOWED_ADMIN_EMAIL = 'dixz8766@gmail.com';
+    const auth = getAuth(app);
+    const googleProvider = new GoogleAuthProvider();
+
+    const loginScreenEl = document.getElementById('loginScreen');
+    const adminContainerEl = document.getElementById('adminContainer');
+    const bottomNavEl = document.getElementById('bottomNav');
+    const btnLogoutEl = document.getElementById('btnLogout');
+    const btnGoogleLoginEl = document.getElementById('btnGoogleLogin');
+    const loginErrorEl = document.getElementById('loginError');
+    const loginLoadingEl = document.getElementById('loginLoading');
+
+    function showLoginScreen(errorMsg) {
+        loginScreenEl.style.display = 'flex';
+        adminContainerEl.style.display = 'none';
+        bottomNavEl.style.display = 'none';
+        btnLogoutEl.style.display = 'none';
+        loginLoadingEl.style.display = 'none';
+        btnGoogleLoginEl.style.display = 'flex';
+        if (errorMsg) {
+            loginErrorEl.textContent = errorMsg;
+            loginErrorEl.style.display = 'block';
+        } else {
+            loginErrorEl.style.display = 'none';
+        }
+    }
+
+    function showAdminDashboard() {
+        loginScreenEl.style.display = 'none';
+        adminContainerEl.style.display = 'block';
+        bottomNavEl.style.display = 'flex';
+        btnLogoutEl.style.display = 'block';
+    }
+
+    btnGoogleLoginEl.addEventListener('click', async () => {
+        loginErrorEl.style.display = 'none';
+        btnGoogleLoginEl.style.display = 'none';
+        loginLoadingEl.style.display = 'block';
+        try {
+            await signInWithPopup(auth, googleProvider);
+            // Hasil ditangani oleh onAuthStateChanged di bawah
+        } catch (err) {
+            console.warn('Login gagal:', err);
+            showLoginScreen('Gagal masuk: ' + (err.message || 'Terjadi kesalahan. Coba lagi.'));
+        }
+    });
+
+    btnLogoutEl.addEventListener('click', async () => {
+        try { await signOut(auth); } catch (err) { console.warn('Logout gagal:', err); }
+    });
+
+    let adminAppInitialized = false;
+    onAuthStateChanged(auth, (user) => {
+        if (!user) {
+            showLoginScreen();
+            return;
+        }
+        if (user.email !== ALLOWED_ADMIN_EMAIL) {
+            signOut(auth).catch(() => {});
+            showLoginScreen('Akun "' + (user.email || '') + '" tidak diizinkan mengakses halaman ini.');
+            return;
+        }
+        showAdminDashboard();
+        if (!adminAppInitialized) {
+            adminAppInitialized = true;
+            initAdminApp();
+        }
+    });
+
+    // Semua fitur admin (Firestore listener, form, dsb) baru jalan setelah login berhasil,
+    // supaya tidak ada request Firestore yang dikirim dari sesi yang belum terautentikasi.
+    function initAdminApp() {
 
     // ===== AUTO-CLEANUP HARIAN (sama seperti di firabase.js sisi web utama) =====
     // Admin biasanya jarang dibuka dibanding web utama, jadi ini pelengkap aja — cleanup
@@ -2254,6 +2372,7 @@
             renderThreadBody(msgs);
         }
     }, (err) => { console.warn('Gagal ambil data pesanMasuk:', err); showErrorState(pesanListView, 'pesan masuk'); });
+    } // akhir initAdminApp()
 </script>
 <script>
 (function () {
