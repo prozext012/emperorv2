@@ -392,7 +392,10 @@
         <h1><span class="h-icon"><svg viewBox="0 0 24 24"><path d="M12 2 2 7v10l10 5 10-5V7L12 2zm0 2.3L19 8l-7 3.5L5 8l7-3.7zM4 9.6l7 3.5v7.6l-7-3.5V9.6zm9 11.1v-7.6l7-3.5v7.6l-7 3.5z"/></svg></span>Produk</h1>
 
         <div class="action-row" style="margin-bottom:20px;">
-            <button class="btn secondary" id="btnImportProduk">Import dari Web Utama</button>
+            <button class="btn secondary" id="btnImportProduk">Import Produk Lama dari File JSON</button>
+            <input type="file" id="importProdukFile" accept="application/json" style="display:none;" />
+            <button class="btn secondary" id="btnMigrasiGambar" style="margin-top:8px;">Migrasi Gambar Lama ke Cloudinary (sekali jalan)</button>
+            <div id="migrasiGambarLog" style="font-size:12px;color:#999;margin-top:6px;white-space:pre-line;"></div>
             <button class="btn" id="btnProdukBaru">+ Produk Baru</button>
         </div>
 
@@ -745,7 +748,7 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
     import {
         getFirestore, collection, addDoc, doc, setDoc, updateDoc, deleteDoc,
-        onSnapshot, query, orderBy, getDocs, where
+        onSnapshot, query, orderBy, getDocs, where, writeBatch, increment, limit
     } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
     // Upload video status pakai Cloudinary (bukan Firebase Storage, karena Storage
@@ -769,139 +772,78 @@
         return data.secure_url;
     }
 
+    // Upload gambar (produk, QRIS, testimoni, notifikasi, status, profil) juga ke Cloudinary —
+    // sebelumnya disimpan sebagai base64 langsung di Firestore, bikin dokumen berat & sinkron lambat.
+    async function uploadImageToCloudinary(blob) {
+        const formData = new FormData();
+        formData.append('file', blob);
+        formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+        const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, {
+            method: 'POST',
+            body: formData
+        });
+        if (!res.ok) {
+            let errMsg = 'Upload gambar ke Cloudinary gagal.';
+            try { const errData = await res.json(); if (errData.error && errData.error.message) errMsg = errData.error.message; } catch (e) {}
+            throw new Error(errMsg);
+        }
+        const data = await res.json();
+        return data.secure_url;
+    }
+
     const firebaseConfig = {
-        apiKey: "AIzaSyDztQD-U1k8Oz1Vnw7z3yUKzSzSP0RN1vg",
-        authDomain: "kasir-warung-c9479.firebaseapp.com",
-        projectId: "kasir-warung-c9479",
-        storageBucket: "kasir-warung-c9479.firebasestorage.app",
-        messagingSenderId: "765164639630",
-        appId: "1:765164639630:web:f7f4fefd1753bfc0e080df",
-        measurementId: "G-739VXW44QZ"
+        apiKey: "AIzaSyAYoOQXd-C8Nf11H1u1WJhjxBwchV7Uhwc",
+        authDomain: "dixzstore-bbb02.firebaseapp.com",
+        projectId: "dixzstore-bbb02",
+        storageBucket: "dixzstore-bbb02.firebasestorage.app",
+        messagingSenderId: "30280369252",
+        appId: "1:30280369252:web:9cec081528f736a2284b71"
     };
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
+    // ===== AUTO-CLEANUP HARIAN (sama seperti di firabase.js sisi web utama) =====
+    // Admin biasanya jarang dibuka dibanding web utama, jadi ini pelengkap aja — cleanup
+    // utama tetap jalan dari kunjungan pengunjung. Data lama dihapus PERMANEN dari Firestore.
+    async function deleteOldDocsAdmin(collectionName, field, cutoff) {
+        try {
+            const snap = await getDocs(query(collection(db, collectionName), where(field, '<', cutoff), limit(400)));
+            if (snap.empty) return;
+            const batch = writeBatch(db);
+            snap.forEach(d => batch.delete(d.ref));
+            await batch.commit();
+        } catch (e) { console.log(`[cleanup] gagal bersihin ${collectionName}:`, e); }
+    }
+    (function scheduleCleanupAdmin() {
+        try {
+            const THROTTLE = 3 * 3600000;
+            const last = Number(localStorage.getItem('lastCleanupRunAdmin') || 0);
+            if (Date.now() - last < THROTTLE) return;
+            localStorage.setItem('lastCleanupRunAdmin', String(Date.now()));
+            const now = Date.now(), H = 3600000;
+            setTimeout(() => {
+                Promise.all([
+                    deleteOldDocsAdmin('statuses', 'expiresAt', now),
+                    deleteOldDocsAdmin('visitorSessions', 'masuk', now - 24 * H),
+                    deleteOldDocsAdmin('pesanMasuk', 'createdAt', now - 24 * H),
+                    deleteOldDocsAdmin('notifikasi', 'createdAt', now - 48 * H),
+                    deleteOldDocsAdmin('visitorPageViews', 'ts', now - 24 * H)
+                ]).catch(() => {});
+            }, 4000);
+        } catch (e) {}
+    })();
+
+    // ===== HELPER STATUS LOADING/GAGAL (biar gak keliatan "kosong" padahal masih dimuat/gagal) =====
+    function showLoadingState(el) {
+        if (el) el.innerHTML = '<div class="empty-state">Memuat data…</div>';
+    }
+    function showErrorState(el, label) {
+        if (el) el.innerHTML = `<div class="empty-state">Gagal memuat ${label}. Cek koneksi internet, lalu refresh halaman.</div>`;
+    }
+
     // ===== DATA SEED: PRODUK LAMA (persis sama dengan yang ada di script.js web utama) =====
-    const LEGACY_PRODUCTS_SEED = {
-        "1": {
-            key: "apk-jam", name: "APK Widget Jam", type: "digital", order: 0,
-            gridShortDesc: "Widget jam estetik buat HP kamu",
-            images: [
-                "https://i.ibb.co.com/FSDJ1pT/Link-apk-jam-20260630-113614-0000.png",
-                "https://i.ibb.co.com/h1tBdFSc/Link-apk-jam-20260630-113614-0001.png"
-            ],
-            gallery: [
-                "https://i.ibb.co.com/rK0HfDH7/Screenshot-20260630-112210.jpg",
-                "https://i.ibb.co.com/RpH9qvPf/Screenshot-20260630-112225.jpg",
-                "https://i.ibb.co.com/MDGTvzZL/Screenshot-20260630-112233.jpg",
-                "https://i.ibb.co.com/chGMfwc9/Screenshot-20260630-112239.jpg",
-                "https://i.ibb.co.com/tTP3KqQB/Screenshot-20260630-112249.jpg",
-                "https://i.ibb.co.com/tp18V090/Screenshot-20260630-112258.jpg"
-            ],
-            priceMode: "coret", priceOriginal: 1999, priceSale: 500, adminFee: 50,
-            qris: "https://i.ibb.co.com/23wpZQfn/IMG-20260702-121127-628.jpg",
-            addon: {
-                name: "Wallpaper Kaya Aku",
-                desc: "Wallpaper estetik pilihan yang aku pakai",
-                images: ["https://i.ibb.co.com/ZpftJz0J/WALLPAPER-YANG-AKU-PAKE-YAH-20260711-085443-0000.png"],
-                priceNormal: 500, priceComboSale: 1000, adminFeeCombo: 100,
-                qrisCombo: "https://i.ibb.co.com/7JrkgP9b/IMG-20260710-181634-982.jpg"
-            },
-            descBlocks: [
-                { type: 'paragraph', text: 'Buat kalian yang sering nanya APK widget jam nya yang keren di mana — ini dia jawabannya 😘' },
-                { type: 'divider' },
-                { type: 'heading', text: 'APA YANG KAMU DAPAT' },
-                { type: 'list', items: ['APK widget jam estetik siap pakai','Tampilan home screen langsung jadi keren','Berbagai pilihan desain jam yang bisa dikustomisasi','Ringan dan tidak membebani HP'] },
-                { type: 'divider' },
-                { type: 'heading', text: 'KENAPA WAJIB PUNYA?' },
-                { type: 'paragraph', text: 'Home screen yang biasa-biasa aja itu membosankan. Dengan widget jam premium ini, tampilan HP kamu langsung beda dari yang lain. Harga segini buat hasil yang langsung keliatan — worth it banget.' },
-                { type: 'divider' }
-            ]
-        },
-        "2": {
-            key: "ig", name: "Followers IG", type: "instagram", order: 3,
-            gridShortDesc: "Dari 100 – 1.000 followers", gridPriceLabel: "Rp 3.000",
-            images: [
-                "https://i.ibb.co.com/kgPd0L6q/100-FOLOWERS-3-K-20260715-184840-0002.png",
-                "https://i.ibb.co.com/SwFHYw8m/100-FOLOWERS-3-K-20260715-184840-0003.png"
-            ],
-            gallery: [
-                "https://i.ibb.co.com/B598xnf6/Screenshot-20260702-115854.jpg",
-                "https://i.ibb.co.com/yjg3zBV/Screenshot-20260702-115920.jpg",
-                "https://i.ibb.co.com/LdYqjhWT/Screenshot-20260715-183559.jpg"
-            ],
-            followerData: {
-                100: { price: 3000, qris: "https://i.ibb.co.com/xK19DV5G/IMG-20260702-120934-860.jpg" },
-                200: { price: 5000, qris: "https://i.ibb.co.com/hRqcb2LS/IMG-20260702-171434-132.jpg" },
-                300: { price: 7000, qris: "https://i.ibb.co.com/dwVT1LP7/IMG-20260702-171907-062.jpg" },
-                400: { price: 9000, qris: "https://i.ibb.co.com/QFwycW1h/IMG-20260702-172322-550.jpg" },
-                500: { price: 10000, qris: "https://i.ibb.co.com/VcPvHT7Y/IMG-20260702-WA0022.jpg" },
-                600: { price: 12000, qris: "https://i.ibb.co.com/0pTcWtGk/IMG-20260702-173043-973.jpg" },
-                700: { price: 14000, qris: "https://i.ibb.co.com/FkM9sBcw/IMG-20260702-173251-600.jpg" },
-                800: { price: 16000, qris: "https://i.ibb.co.com/QFSbtFbm/IMG-20260702-173442-576.jpg" },
-                900: { price: 18000, qris: "https://i.ibb.co.com/8nzMxJTN/IMG-20260702-173558-726.jpg" },
-                1000: { price: 20000, qris: "https://i.ibb.co.com/1JtqP5Hb/IMG-20260702-173715-389.jpg" }
-            },
-            descBlocks: [
-                { type: 'paragraph', text: 'Pengen akun Instagram kamu keliatan lebih kredibel dan ramai? Tambah followers sekarang dengan harga terjangkau dan proses cepat 🔥' },
-                { type: 'divider' },
-                { type: 'heading', text: 'KEUNGGULAN' },
-                { type: 'list', items: ['Proses cepat, langsung masuk ke akun kamu','Aman, tidak perlu kasih password','Pilih sendiri jumlah yang kamu inginkan','Mulai dari 100 sampai 1.000 followers'] }
-            ]
-        },
-        "3": {
-            key: "ebook", name: "2.000+ Buku Digital Premium", type: "digital", order: 2,
-            gridShortDesc: "2.000+ e-book premium, sekali beli",
-            images: [
-                "https://i.ibb.co.com/PsWRYXD2/AIRetouch-20260702-163825169.jpg",
-                "https://i.ibb.co.com/bjhqvjpr/AIRetouch-20260702-163853045.jpg"
-            ],
-            gallery: [
-                "https://i.ibb.co.com/nNpvPQFs/Screenshot-20260702-164802.jpg",
-                "https://i.ibb.co.com/SDwk1P0W/Screenshot-20260702-164740.jpg",
-                "https://i.ibb.co.com/B5y7Hz7d/Screenshot-20260702-164851.jpg"
-            ],
-            priceMode: "coret", priceOriginal: 10000, priceSale: 5000, adminFee: 500,
-            qris: "https://i.ibb.co.com/vvXzscCx/IMG-20260702-165849-384.jpg",
-            addon: null,
-            descBlocks: [
-                { type: 'paragraph', text: 'Bukan sekedar kumpulan buku. Ini adalah investasi pengetahuan terbesar yang pernah kamu lakukan dengan harga yang tidak akan kamu sangka.' },
-                { type: 'divider' },
-                { type: 'heading', text: 'APA YANG KAMU DAPATKAN' },
-                { type: 'list', items: ['AI & Teknologi','Bisnis & Kewirausahaan','Crypto & Forex','Pola Pikir & Peningkatan Diri','Psikologi','Novel & Manga','Koleksi Lengkap Tere Liye','Hukum','Islami & Pengembangan Spiritual','Persiapan UTBK & SKD/SKB','Motivasi & Kutipan'] }
-            ]
-        },
-        "4": {
-            key: "tiktok", name: "Followers TikTok", type: "tiktok", order: 1,
-            gridShortDesc: "Dari 100 – 1.000 followers", gridPriceLabel: "Rp 6.000",
-            images: [
-                "https://i.ibb.co.com/4w9qCX8R/100-FOLOWERS-3-K-20260715-184840-0000.png",
-                "https://i.ibb.co.com/cXpMchH6/100-FOLOWERS-3-K-20260715-184840-0001.png"
-            ],
-            gallery: [
-                "https://i.ibb.co.com/vC50VBk7/Screenshot-20260715-193223.jpg",
-                "https://i.ibb.co.com/Lhhz530G/Screenshot-20260715-175015.jpg"
-            ],
-            followerData: {
-                100: { price: 6000, qris: "https://i.ibb.co.com/RpN5QNZT/IMG-20260715-190402-037.jpg" },
-                200: { price: 12000, qris: "https://i.ibb.co.com/5Wc0sC3S/IMG-20260715-190630-120.jpg" },
-                300: { price: 18000, qris: "https://i.ibb.co.com/MkGG64c9/IMG-20260715-190728-340.jpg" },
-                400: { price: 24000, qris: "https://i.ibb.co.com/b5nwDXgR/IMG-20260715-190828-089.jpg" },
-                500: { price: 30000, qris: "https://i.ibb.co.com/ymfSJ6xd/IMG-20260715-190926-861.jpg" },
-                600: { price: 36000, qris: "https://i.ibb.co.com/fV62zCjY/IMG-20260715-191036-590.jpg" },
-                700: { price: 42000, qris: "https://i.ibb.co.com/BXJ2J2x/IMG-20260715-191128-153.jpg" },
-                800: { price: 48000, qris: "https://i.ibb.co.com/Vptc7LDS/IMG-20260715-191227-913.jpg" },
-                900: { price: 54000, qris: "https://i.ibb.co.com/hxgHYwqs/IMG-20260715-191320-930.jpg" },
-                1000: { price: 60000, qris: "https://i.ibb.co.com/jkFYwBVB/IMG-20260715-191432-690.jpg" }
-            },
-            descBlocks: [
-                { type: 'paragraph', text: 'Mau akun TikTok kamu makin ramai dan terlihat lebih credible? Tambah followers sekarang dengan harga terjangkau dan proses cepat 🎵🔥' },
-                { type: 'divider' },
-                { type: 'heading', text: 'KEUNGGULAN' },
-                { type: 'list', items: ['Proses cepat, langsung masuk ke akun TikTok kamu','Aman, tidak perlu kasih password','Pilih sendiri jumlah yang kamu inginkan','Mulai dari 100 sampai 1.000 followers'] }
-            ]
-        }
-    };
+    // Data produk lama sekarang ada di file terpisah (legacy_products_backup.json),
+    // gak lagi ditanam di source code -- lihat fungsi import produk di bawah.
 
     // ===== NAVIGASI BOTTOM TAB =====
     const tabPairs = [
@@ -974,8 +916,9 @@
         const preview = document.getElementById('testiImgPreview');
         if (!file) { preview.style.display = 'none'; testiImgBase64 = ''; return; }
         try {
-            const base64 = await fileToBase64IfAny(file);
-            testiImgBase64 = await applyWatermark(base64);
+            const resized = await withTimeout(fileToCompressedBase64(file), 20000, 'Proses gambar');
+            const watermarked = await applyWatermark(resized);
+            testiImgBase64 = await withTimeout(uploadImageToCloudinary(dataUrlToBlob(watermarked)), 20000, 'Upload gambar');
             preview.src = testiImgBase64;
             preview.style.display = 'block';
         } catch (err) {
@@ -1395,6 +1338,7 @@
     });
 
     const produkList = document.getElementById('produkList');
+    showLoadingState(produkList);
     onSnapshot(query(collection(db, 'products'), orderBy('order')), (snap) => {
         window.__produkCache = {};
         produkList.innerHTML = '';
@@ -1425,27 +1369,43 @@
             };
             produkList.appendChild(item);
         });
-    });
+    }, (err) => { console.warn('Gagal ambil data products:', err); showErrorState(produkList, 'produk'); });
 
-    // ===== IMPORT PRODUK LAMA DARI WEB UTAMA (sekali saja) =====
-    document.getElementById('btnImportProduk').addEventListener('click', async () => {
+    // ===== IMPORT PRODUK LAMA (dari file JSON backup, bukan lagi ditanam di source) =====
+    // Data produk lama sebelumnya nempel langsung di kode ini — dipindah ke file terpisah
+    // (legacy_products_backup.json) yang cuma kamu simpan sendiri, biar gak ikut kebocor
+    // kalau ada yang nyalin source code web ini.
+    document.getElementById('btnImportProduk').addEventListener('click', () => {
+        document.getElementById('importProdukFile').click();
+    });
+    document.getElementById('importProdukFile').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        let legacy;
+        try {
+            legacy = JSON.parse(await file.text());
+        } catch (err) {
+            alert('File JSON tidak valid: ' + err.message);
+            e.target.value = '';
+            return;
+        }
         const existing = await getDocs(collection(db, 'products'));
         if (!existing.empty) {
-            if (!confirm('Sudah ada data produk di database. Import ulang & timpa produk id 1-4? (produk baru yang kamu tambah sendiri tidak akan hilang)')) return;
+            if (!confirm('Sudah ada data produk di database. Import & timpa produk dari file ini?')) { e.target.value = ''; return; }
         }
         const btn = document.getElementById('btnImportProduk');
         btn.disabled = true; btn.textContent = 'Mengimport...';
         try {
-            const legacy = LEGACY_PRODUCTS_SEED;
             for (const id of Object.keys(legacy)) {
                 await setDoc(doc(db, 'products', id), legacy[id]);
             }
             alert('Import produk lama selesai.');
-        } catch (e) {
-            console.error('Gagal import produk:', e);
-            alert('Gagal import: ' + e.message);
+        } catch (err) {
+            console.error('Gagal import produk:', err);
+            alert('Gagal import: ' + err.message);
         }
-        btn.disabled = false; btn.textContent = 'Import Produk dari Web Utama (sekali saja)';
+        btn.disabled = false; btn.textContent = 'Import Produk Lama dari File JSON';
+        e.target.value = '';
     });
 
     function withTimeout(promise, ms, label) {
@@ -1455,8 +1415,120 @@
         ]);
     }
 
-    // Gambar disimpan langsung sebagai base64 di dalam data notifikasi/testimoni
-    // (dikecilkan dulu biar gak kelewat besar buat 1 dokumen Firestore).
+    // ===== MIGRASI GAMBAR LAMA (base64) KE CLOUDINARY, SEKALI JALAN =====
+    // Perbaikan Cloudinary sebelumnya cuma berlaku buat UPLOAD BARU. Data yang udah kepalanjur
+    // tersimpan sebagai base64 sebelum ini (produk, testimoni, notifikasi, foto profil) gak
+    // otomatis ikut pindah -- makanya perlu tombol ini buat beresin yang lama sekali jalan.
+    function isBase64Image(v) { return typeof v === 'string' && v.startsWith('data:image'); }
+    async function migrateVal(v) {
+        if (!isBase64Image(v)) return v;
+        return uploadImageToCloudinary(dataUrlToBlob(v));
+    }
+    document.getElementById('btnMigrasiGambar').addEventListener('click', async () => {
+        if (!confirm('Ini akan mengunggah semua gambar lama (base64) di produk, testimoni, notifikasi, dan foto profil ke Cloudinary, lalu menggantinya jadi link. Proses bisa makan waktu beberapa menit tergantung jumlah data. Lanjutkan?')) return;
+        const btn = document.getElementById('btnMigrasiGambar');
+        const log = document.getElementById('migrasiGambarLog');
+        btn.disabled = true; btn.textContent = 'Migrasi berjalan...';
+        let totalKonversi = 0;
+        function tulisLog(msg) { log.textContent += msg + '\n'; }
+        log.textContent = '';
+        try {
+            // ----- Produk -----
+            const produkSnap = await getDocs(collection(db, 'products'));
+            for (const docSnap of produkSnap.docs) {
+                const d = docSnap.data();
+                const update = {};
+                let ubah = false;
+                if (Array.isArray(d.mainImages)) {
+                    const arr = [];
+                    for (const img of d.mainImages) { const n = await migrateVal(img); if (n !== img) ubah = true; arr.push(n); }
+                    if (ubah) update.mainImages = arr;
+                }
+                if (Array.isArray(d.gallery)) {
+                    const arr = [];
+                    let g = false;
+                    for (const img of d.gallery) { const n = await migrateVal(img); if (n !== img) g = true; arr.push(n); }
+                    if (g) { update.gallery = arr; ubah = true; }
+                }
+                if (isBase64Image(d.qris)) { update.qris = await migrateVal(d.qris); ubah = true; }
+                if (Array.isArray(d.descBlocks)) {
+                    const arr = [];
+                    let bChanged = false;
+                    for (const b of d.descBlocks) {
+                        if (b && b.type === 'image' && isBase64Image(b.src)) {
+                            arr.push({ ...b, src: await migrateVal(b.src) });
+                            bChanged = true;
+                        } else arr.push(b);
+                    }
+                    if (bChanged) { update.descBlocks = arr; ubah = true; }
+                }
+                if (d.addon) {
+                    const addon = { ...d.addon };
+                    let aChanged = false;
+                    if (isBase64Image(addon.img)) { addon.img = await migrateVal(addon.img); aChanged = true; }
+                    if (isBase64Image(addon.qrisCombo)) { addon.qrisCombo = await migrateVal(addon.qrisCombo); aChanged = true; }
+                    if (aChanged) { update.addon = addon; ubah = true; }
+                }
+                if (ubah) {
+                    await updateDoc(doc(db, 'products', docSnap.id), update);
+                    totalKonversi++;
+                    tulisLog(`✓ Produk "${d.name || docSnap.id}" selesai dimigrasi`);
+                }
+            }
+            // ----- Testimoni -----
+            const testiSnap = await getDocs(collection(db, 'testimoni'));
+            for (const docSnap of testiSnap.docs) {
+                const d = docSnap.data();
+                if (isBase64Image(d.img)) {
+                    await updateDoc(doc(db, 'testimoni', docSnap.id), { img: await migrateVal(d.img) });
+                    totalKonversi++;
+                    tulisLog(`✓ Testimoni ${docSnap.id} selesai dimigrasi`);
+                }
+            }
+            // ----- Notifikasi -----
+            const notifSnap = await getDocs(collection(db, 'notifikasi'));
+            for (const docSnap of notifSnap.docs) {
+                const d = docSnap.data();
+                if (isBase64Image(d.img)) {
+                    await updateDoc(doc(db, 'notifikasi', docSnap.id), { img: await migrateVal(d.img) });
+                    totalKonversi++;
+                    tulisLog(`✓ Notifikasi ${docSnap.id} selesai dimigrasi`);
+                }
+            }
+            // ----- Foto profil (avatar & banner) -----
+            const profSnap = await getDocs(collection(db, 'settings'));
+            for (const docSnap of profSnap.docs) {
+                const d = docSnap.data();
+                const update = {};
+                let ubah = false;
+                if (isBase64Image(d.avatar)) { update.avatar = await migrateVal(d.avatar); ubah = true; }
+                if (isBase64Image(d.banner)) { update.banner = await migrateVal(d.banner); ubah = true; }
+                if (ubah) {
+                    await updateDoc(doc(db, 'settings', docSnap.id), update);
+                    totalKonversi++;
+                    tulisLog(`✓ Profil (${docSnap.id}) selesai dimigrasi`);
+                }
+            }
+            tulisLog(`\nSelesai! Total ${totalKonversi} dokumen dimigrasi ke Cloudinary.`);
+            if (totalKonversi === 0) tulisLog('Gak ada gambar base64 lama yang ketemu -- semua udah bersih.');
+        } catch (err) {
+            tulisLog('Gagal: ' + err.message);
+            console.error(err);
+        }
+        btn.disabled = false; btn.textContent = 'Migrasi Gambar Lama ke Cloudinary (sekali jalan)';
+    });
+
+    function dataUrlToBlob(dataUrl) {
+        const [meta, b64] = dataUrl.split(',');
+        const mime = meta.match(/:(.*?);/)[1];
+        const bin = atob(b64);
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        return new Blob([arr], { type: mime });
+    }
+
+    // Gambar dikecilkan dulu di browser (hemat kuota upload & Firestore), baru diupload
+    // ke Cloudinary. Yang disimpan ke Firestore cuma URL hasilnya (pendek), bukan base64.
     function fileToCompressedBase64(file, maxWidth = 1000, quality = 0.72) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -1478,13 +1550,12 @@
         });
     }
 
+    // Nama fungsi dipertahankan (dipakai di banyak tempat) tapi sekarang hasilnya URL Cloudinary,
+    // bukan base64 lagi — jadi bisa langsung dipakai sebagai src gambar seperti biasa.
     async function fileToBase64IfAny(file) {
         if (!file) return '';
-        const base64 = await withTimeout(fileToCompressedBase64(file), 20000, 'Proses gambar');
-        if (base64.length > 900000) {
-            throw new Error('Ukuran gambar masih terlalu besar setelah dikecilkan, coba pakai foto lain.');
-        }
-        return base64;
+        const dataUrl = await withTimeout(fileToCompressedBase64(file), 20000, 'Proses gambar');
+        return withTimeout(uploadImageToCloudinary(dataUrlToBlob(dataUrl)), 20000, 'Upload gambar');
     }
 
     function formatWaktu(ts) {
@@ -1515,6 +1586,7 @@
 
     // ===== NOTIFIKASI V1: RIWAYAT (realtime) =====
     const notifV1Riwayat = document.getElementById('notifV1Riwayat');
+    showLoadingState(notifV1Riwayat);
     onSnapshot(query(collection(db, 'notifikasiV1'), orderBy('createdAt', 'asc')), (snap) => {
         notifV1Riwayat.innerHTML = '';
         if (snap.empty) { notifV1Riwayat.innerHTML = '<div class="empty-state">Belum ada pesan.</div>'; return; }
@@ -1541,7 +1613,7 @@
             };
             notifV1Riwayat.appendChild(item);
         });
-    });
+    }, (err) => { console.warn('Gagal ambil data notifikasiV1:', err); showErrorState(notifV1Riwayat, 'notifikasi ticker'); });
 
     // ===== NOTIFIKASI: SUBMIT =====
     document.getElementById('btnSubmitNotif').addEventListener('click', async () => {
@@ -1569,7 +1641,8 @@
 
     // ===== NOTIFIKASI: RIWAYAT (realtime) =====
     const notifRiwayat = document.getElementById('notifRiwayat');
-    onSnapshot(query(collection(db, 'notifikasi'), orderBy('createdAt', 'desc')), (snap) => {
+    showLoadingState(notifRiwayat);
+    onSnapshot(query(collection(db, 'notifikasi'), orderBy('createdAt', 'desc'), limit(200)), (snap) => {
         notifRiwayat.innerHTML = '';
         if (snap.empty) { notifRiwayat.innerHTML = '<div class="empty-state">Belum ada riwayat.</div>'; return; }
         snap.forEach(docSnap => {
@@ -1610,7 +1683,7 @@
             };
             notifRiwayat.appendChild(item);
         });
-    });
+    }, (err) => { console.warn('Gagal ambil data notifikasi:', err); showErrorState(notifRiwayat, 'riwayat notifikasi'); });
 
     // ===== TESTIMONI: SUBMIT =====
     document.getElementById('btnSubmitTesti').addEventListener('click', async () => {
@@ -1670,6 +1743,7 @@
 
     // ===== TESTIMONI: RIWAYAT (realtime) =====
     const testiRiwayat = document.getElementById('testiRiwayat');
+    showLoadingState(testiRiwayat);
     onSnapshot(query(collection(db, 'testimoni'), orderBy('createdAt', 'desc')), (snap) => {
         testiRiwayat.innerHTML = '';
         if (snap.empty) { testiRiwayat.innerHTML = '<div class="empty-state">Belum ada riwayat.</div>'; return; }
@@ -1701,9 +1775,10 @@
                 const file = testiFileInput.files[0];
                 if (!file) return;
                 try {
-                    const base64 = await fileToBase64IfAny(file);
-                    const watermarked = await applyWatermark(base64);
-                    await updateDoc(doc(db, 'testimoni', docSnap.id), { img: watermarked });
+                    const resized = await withTimeout(fileToCompressedBase64(file), 20000, 'Proses gambar');
+                    const watermarked = await applyWatermark(resized);
+                    const url = await withTimeout(uploadImageToCloudinary(dataUrlToBlob(watermarked)), 20000, 'Upload gambar');
+                    await updateDoc(doc(db, 'testimoni', docSnap.id), { img: url });
                 } catch (e) {
                     alert('Gagal mengganti foto: ' + e.message);
                 }
@@ -1714,7 +1789,7 @@
             };
             testiRiwayat.appendChild(item);
         });
-    });
+    }, (err) => { console.warn('Gagal ambil data testimoni:', err); showErrorState(testiRiwayat, 'testimoni'); });
 
     // ================================================================
     // ===== FITUR STATUS (COMPOSER) =====
@@ -1868,6 +1943,7 @@
 
     // ===== DAFTAR STATUS AKTIF + HAPUS =====
     const statusActiveList = document.getElementById('statusActiveList');
+    showLoadingState(statusActiveList);
     onSnapshot(collection(db, 'statuses'), (snap) => {
         const now = Date.now();
         const all = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => !s.expiresAt || s.expiresAt > now);
@@ -1894,10 +1970,7 @@
                 await deleteDoc(doc(db, 'statuses', btn.dataset.del));
             };
         });
-    });
-
-    // ================================================================
-    // ===== FITUR DATA PENGUNJUNG =====
+    }, (err) => { console.warn('Gagal ambil data statuses:', err); showErrorState(statusActiveList, 'status'); });
     // ================================================================
     (function pengunjungFeature() {
       try {
@@ -1924,44 +1997,60 @@
 
         let sessionsData = [];
         let pageViewsData = [];
+        let dailyStatsData = {}; // { 'YYYY-MM-DD': visits } — permanen, gak ikut kehapus
+        let summaryData = {}; // totalVisitsAllTime, totalNewVisitorsAllTime, hourly{}, pageCounts{} — permanen
         let chartInstance = null;
         let jamChartInstance = null;
+        function dk(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 
         function render() {
           try {
             const now = Date.now();
             const startHariIni = new Date(); startHariIni.setHours(0,0,0,0);
-            const startMinggu = startHariIni.getTime() - 6 * 86400000;
+            const startMinggu = new Date(startHariIni.getTime() - 6 * 86400000);
             const startBulan = new Date(now); startBulan.setDate(1); startBulan.setHours(0,0,0,0);
             const startTahun = new Date(now); startTahun.setMonth(0,1); startTahun.setHours(0,0,0,0);
 
-            document.getElementById('statHariIni').textContent = sessionsData.filter(s => s.masuk >= startHariIni.getTime()).length;
-            document.getElementById('statMingguIni').textContent = sessionsData.filter(s => s.masuk >= startMinggu).length;
-            document.getElementById('statBulanIni').textContent = sessionsData.filter(s => s.masuk >= startBulan.getTime()).length;
-            document.getElementById('statTahunIni').textContent = sessionsData.filter(s => s.masuk >= startTahun.getTime()).length;
-            document.getElementById('statSemua').textContent = sessionsData.length;
+            // Statistik Hari Ini/Minggu/Bulan/Tahun dihitung dari dailyStats (counter permanen per-hari,
+            // ukurannya kecil jadi gak pernah dihapus) — BUKAN dari sessionsData mentah yang sekarang
+            // cuma disimpan 1 hari, biar angkanya tetap akurat walau data sesi lama udah dibersihin.
+            function sumDailyStatsFrom(startDate) {
+                let total = 0;
+                const cursor = new Date(startDate);
+                const end = new Date();
+                while (cursor <= end) {
+                    total += dailyStatsData[dk(cursor)] || 0;
+                    cursor.setDate(cursor.getDate() + 1);
+                }
+                return total;
+            }
+            document.getElementById('statHariIni').textContent = dailyStatsData[dk(startHariIni)] || 0;
+            document.getElementById('statMingguIni').textContent = sumDailyStatsFrom(startMinggu);
+            document.getElementById('statBulanIni').textContent = sumDailyStatsFrom(startBulan);
+            document.getElementById('statTahunIni').textContent = sumDailyStatsFrom(startTahun);
+            document.getElementById('statSemua').textContent = summaryData.totalVisitsAllTime || 0;
 
             // sedang online: status online DAN masih ada heartbeat dalam 45 detik terakhir
+            // (ini tetap dari data sesi mentah karena butuh data real-time, bukan histori)
             const onlineNow = sessionsData.filter(s => s.status === 'online' && (now - (s.lastSeen || s.masuk)) < 45000).length;
             document.getElementById('statOnlineNow').textContent = onlineNow;
 
-            const baru = sessionsData.filter(s => s.isNew).length;
-            const lama = sessionsData.length - baru;
+            // Baru vs Lama: dari counter permanen (sepanjang masa), bukan dari sesi mentah yang dibersihin
+            const totalAllTime = summaryData.totalVisitsAllTime || 0;
+            const baru = summaryData.totalNewVisitorsAllTime || 0;
+            const lama = Math.max(0, totalAllTime - baru);
             document.getElementById('statBaru').textContent = baru;
             document.getElementById('statLama').textContent = lama;
-            document.getElementById('statBaruBar').style.width = sessionsData.length ? (baru / sessionsData.length * 100) + '%' : '0%';
+            document.getElementById('statBaruBar').style.width = totalAllTime ? (baru / totalAllTime * 100) + '%' : '0%';
 
-            // grafik 14 hari terakhir
+            // grafik 14 hari terakhir — dari dailyStats, bukan sessionsData mentah
             const days = [];
             for (let i = 13; i >= 0; i--) {
                 const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() - i);
                 days.push(d);
             }
             const chartLabels = days.map(d => d.getDate() + '/' + (d.getMonth()+1));
-            const chartData = days.map(d => {
-                const startD = d.getTime(), endD = startD + 86400000;
-                return sessionsData.filter(s => s.masuk >= startD && s.masuk < endD).length;
-            });
+            const chartData = days.map(d => dailyStatsData[dk(d)] || 0);
             const ctx = document.getElementById('pengunjungChart');
             if (ctx && typeof Chart !== 'undefined') {
                 if (chartInstance) chartInstance.destroy();
@@ -1972,9 +2061,9 @@
                 });
             }
 
-            // jam ramai
+            // jam ramai — dari counter permanen (sepanjang masa), bukan sessionsData mentah
             const jamCount = new Array(24).fill(0);
-            sessionsData.forEach(s => { jamCount[new Date(s.masuk).getHours()]++; });
+            for (let h = 0; h < 24; h++) jamCount[h] = (summaryData.hourly && summaryData.hourly[String(h)]) || 0;
             const jamCtx = document.getElementById('pengunjungJamChart');
             if (jamCtx && typeof Chart !== 'undefined') {
                 if (jamChartInstance) jamChartInstance.destroy();
@@ -2014,9 +2103,9 @@
                 </div></div>
             `).join('') || '<div class="empty-state">Belum ada notifikasi.</div>';
 
-            // halaman paling sering dibuka
-            const pageCount = {};
-            pageViewsData.forEach(p => { pageCount[p.page] = (pageCount[p.page] || 0) + 1; });
+            // halaman paling sering dibuka — dari counter permanen (sepanjang masa),
+            // bukan visitorPageViews mentah yang sekarang cuma disimpan 1 hari
+            const pageCount = summaryData.pageCounts || {};
             const topPages = Object.entries(pageCount).sort((a, b) => b[1] - a[1]).slice(0, 10);
             document.getElementById('topPagesList').innerHTML = topPages.map(([page, count]) => `
                 <div class="top-page-item"><span>${page}</span><span class="top-page-count">${count}x</span></div>
@@ -2034,6 +2123,16 @@
             pageViewsData = snap.docs.map(d => d.data());
             render();
         }, (err) => console.warn('Gagal ambil data visitorPageViews:', err));
+        onSnapshot(collection(db, 'dailyStats'), (snap) => {
+            const obj = {};
+            snap.forEach(d => { obj[d.id] = (d.data() || {}).visits || 0; });
+            dailyStatsData = obj;
+            render();
+        }, (err) => console.warn('Gagal ambil data dailyStats:', err));
+        onSnapshot(doc(db, 'stats', 'summary'), (snap) => {
+            summaryData = snap.exists() ? snap.data() : {};
+            render();
+        }, (err) => console.warn('Gagal ambil data stats/summary:', err));
         // refresh angka "sedang online" tiap 15 detik (karena ambangnya berbasis waktu berjalan)
         setInterval(render, 15000);
       } catch (err) {
@@ -2136,6 +2235,7 @@
         currentThreadVisitorId = null;
     });
 
+    showLoadingState(pesanListView);
     onSnapshot(query(collection(db, 'pesanMasuk'), orderBy('createdAt', 'desc')), (snap) => {
         allPesanMasuk = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         renderChatList();
@@ -2143,7 +2243,7 @@
             const msgs = allPesanMasuk.filter(m => m.visitorId === currentThreadVisitorId).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
             renderThreadBody(msgs);
         }
-    });
+    }, (err) => { console.warn('Gagal ambil data pesanMasuk:', err); showErrorState(pesanListView, 'pesan masuk'); });
 </script>
 <script>
 (function () {
