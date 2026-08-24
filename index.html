@@ -540,6 +540,8 @@
                 <input type="text" id="profilNamaInput" placeholder="Nama" />
                 <label>Bio</label>
                 <textarea id="profilBioInput" placeholder="Bio..."></textarea>
+                <label>Nomor WhatsApp</label>
+                <input type="text" id="profilWaInput" placeholder="Contoh: 6282112345678 (kode negara, tanpa + atau 0 di depan)" />
                 <button class="btn" id="btnSubmitProfil">Simpan Perubahan</button>
             </div>
         </div>
@@ -965,11 +967,13 @@
         currentProfil = snap.exists() ? snap.data() : {};
         const namaEl = document.getElementById('profilNamaInput');
         const bioEl = document.getElementById('profilBioInput');
+        const waEl = document.getElementById('profilWaInput');
         const avatarPrev = document.getElementById('profilAvatarPreview');
         const bannerPrev = document.getElementById('profilBannerPreview');
         // jangan timpa yang lagi diketik user; cuma isi kalau field masih kosong
         if (document.activeElement !== namaEl && !namaEl.value) namaEl.value = currentProfil.nama || '';
         if (document.activeElement !== bioEl && !bioEl.value) bioEl.value = currentProfil.bio || '';
+        if (document.activeElement !== waEl && !waEl.value) waEl.value = currentProfil.whatsapp || '';
         if (currentProfil.avatar) { avatarPrev.src = currentProfil.avatar; avatarPrev.style.display = 'block'; }
         if (currentProfil.banner) { bannerPrev.src = currentProfil.banner; bannerPrev.style.display = 'block'; }
     });
@@ -978,13 +982,19 @@
         const btn = document.getElementById('btnSubmitProfil');
         const nama = document.getElementById('profilNamaInput').value.trim();
         const bio = document.getElementById('profilBioInput').value.trim();
+        const wa = document.getElementById('profilWaInput').value.trim().replace(/[^0-9]/g, '');
         const avatarFile = document.getElementById('profilAvatarInput').files[0];
         const bannerFile = document.getElementById('profilBannerInput').files[0];
+        if (wa && wa.startsWith('0')) {
+            alert('Nomor WA jangan diawali angka 0 — pakai kode negara, contoh: 62821xxxxxxx (bukan 0821xxxxxxx).');
+            return;
+        }
         btn.disabled = true; btn.textContent = 'Menyimpan...';
         try {
             const update = {};
             if (nama) update.nama = nama;
             if (bio) update.bio = bio;
+            if (wa) update.whatsapp = wa;
             if (avatarFile) update.avatar = await fileToBase64IfAny(avatarFile);
             if (bannerFile) update.banner = await fileToBase64IfAny(bannerFile);
             await withTimeout(
