@@ -794,7 +794,7 @@
         onSnapshot, query, orderBy, getDocs, where, writeBatch, increment, limit
     } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
     import {
-        getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut
+        getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut
     } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
 
     // Upload video status pakai Cloudinary (bukan Firebase Storage, karena Storage
@@ -888,10 +888,18 @@
         btnGoogleLoginEl.style.display = 'none';
         loginLoadingEl.style.display = 'block';
         try {
-            await signInWithPopup(auth, googleProvider);
-            // Hasil ditangani oleh onAuthStateChanged di bawah
+            await signInWithRedirect(auth, googleProvider);
+            // Halaman akan reload otomatis setelah redirect balik dari Google
         } catch (err) {
             console.warn('Login gagal:', err);
+            showLoginScreen('Gagal masuk: ' + (err.message || 'Terjadi kesalahan. Coba lagi.'));
+        }
+    });
+
+    // Tangani hasil redirect setelah balik dari halaman login Google
+    getRedirectResult(auth).catch((err) => {
+        console.warn('Redirect login gagal:', err);
+        if (err && err.code && err.code !== 'auth/no-auth-event') {
             showLoginScreen('Gagal masuk: ' + (err.message || 'Terjadi kesalahan. Coba lagi.'));
         }
     });
