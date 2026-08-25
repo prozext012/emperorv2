@@ -342,15 +342,8 @@
         padding: 13px 22px; font-family: 'Inter', sans-serif; font-weight: 700; font-size: 0.86rem;
         cursor: pointer; box-shadow: var(--shadow-md);
     }
-    #btnGoogleLogin svg { width: 18px; height: 18px; }
     #loginError { color: #ff8080; font-size: 0.78rem; margin-top: 16px; display: none; max-width: 280px; }
     #loginLoading { color: #a8a3bd; font-size: 0.8rem; margin-top: 16px; display: none; }
-    #btnLogout {
-        position: fixed; top: 14px; right: 14px; z-index: 100; background: var(--light);
-        border: 1.5px solid var(--border); border-radius: 10px; padding: 8px 12px;
-        font-family: 'Inter', sans-serif; font-weight: 700; font-size: 0.72rem; color: var(--soft-red);
-        cursor: pointer; box-shadow: var(--shadow-sm);
-    }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
@@ -372,7 +365,6 @@
     <p id="loginLoading">Memeriksa akun…</p>
     <p id="loginError"></p>
 </div>
-<button type="button" id="btnLogout" style="display:none;">Keluar</button>
 <div class="container" id="adminContainer" style="display:none;">
 
     <div class="tab-page active" id="pageNotif">
@@ -591,6 +583,9 @@
                 <label>Nomor WhatsApp</label>
                 <input type="text" id="profilWaInput" placeholder="Contoh: 6282112345678 (kode negara, tanpa + atau 0 di depan)" />
                 <button class="btn" id="btnSubmitProfil">Simpan Perubahan</button>
+            </div>
+            <div class="card">
+                <button type="button" id="btnLogout" style="width:100%; background:#3a1c1c; border:1.5px solid var(--soft-red); border-radius:11px; padding:12px; font-family:'Inter',sans-serif; font-weight:700; font-size:0.86rem; color:var(--soft-red); cursor:pointer;">Keluar dari Akun Admin</button>
             </div>
         </div>
     </div>
@@ -874,7 +869,6 @@
         loginScreenEl.style.display = 'flex';
         adminContainerEl.style.display = 'none';
         bottomNavEl.style.display = 'none';
-        btnLogoutEl.style.display = 'none';
         loginLoadingEl.style.display = 'none';
         loginFormEl.style.display = 'block';
         if (errorMsg) {
@@ -889,7 +883,6 @@
         loginScreenEl.style.display = 'none';
         adminContainerEl.style.display = 'block';
         bottomNavEl.style.display = 'flex';
-        btnLogoutEl.style.display = 'block';
     }
 
     loginFormEl.addEventListener('submit', async (e) => {
