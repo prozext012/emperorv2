@@ -585,6 +585,17 @@
                 <button class="btn" id="btnSubmitProfil">Simpan Perubahan</button>
             </div>
             <div class="card">
+                <label>Judul Peringatan (muncul menutupi layar saat DevTools/Inspect kebuka)</label>
+                <input type="text" id="antiDtOverlayTitleInput" placeholder="Contoh: ⚠️ Peringatan" />
+                <label>Isi Pesan Peringatan</label>
+                <textarea id="antiDtOverlayMessageInput" placeholder="Contoh: Untuk keamanan, DevTools tidak diizinkan di halaman ini..."></textarea>
+                <label>Judul Pesan di Console Browser</label>
+                <input type="text" id="antiDtConsoleTitleInput" placeholder="Contoh: STOP!" />
+                <label>Isi Pesan di Console Browser</label>
+                <textarea id="antiDtConsoleMessageInput" placeholder="Contoh: Ini fitur milik toko kami, jangan tempel kode apa pun di sini..."></textarea>
+                <button class="btn" id="btnSubmitAntiDt">Simpan Perubahan</button>
+            </div>
+            <div class="card">
                 <button type="button" id="btnLogout" style="width:100%; background:#3a1c1c; border:1.5px solid var(--soft-red); border-radius:11px; padding:12px; font-family:'Inter',sans-serif; font-weight:700; font-size:0.86rem; color:var(--soft-red); cursor:pointer;">Keluar dari Akun Admin</button>
             </div>
         </div>
@@ -1105,6 +1116,45 @@
         if (document.activeElement !== waEl && !waEl.value) waEl.value = currentProfil.whatsapp || '';
         if (currentProfil.avatar) { avatarPrev.src = currentProfil.avatar; avatarPrev.style.display = 'block'; }
         if (currentProfil.banner) { bannerPrev.src = currentProfil.banner; bannerPrev.style.display = 'block'; }
+    });
+
+    // ===== TAB PROFIL: teks peringatan Anti-DevTools =====
+    onSnapshot(doc(db, 'settings', 'antiDevtools'), (snap) => {
+        const data = snap.exists() ? snap.data() : {};
+        const titleEl = document.getElementById('antiDtOverlayTitleInput');
+        const msgEl = document.getElementById('antiDtOverlayMessageInput');
+        const consoleTitleEl = document.getElementById('antiDtConsoleTitleInput');
+        const consoleMsgEl = document.getElementById('antiDtConsoleMessageInput');
+        // jangan timpa yang lagi diketik user; cuma isi kalau field masih kosong
+        if (document.activeElement !== titleEl && !titleEl.value) titleEl.value = data.overlayTitle || '';
+        if (document.activeElement !== msgEl && !msgEl.value) msgEl.value = data.overlayMessage || '';
+        if (document.activeElement !== consoleTitleEl && !consoleTitleEl.value) consoleTitleEl.value = data.consoleWarningTitle || '';
+        if (document.activeElement !== consoleMsgEl && !consoleMsgEl.value) consoleMsgEl.value = data.consoleWarningMessage || '';
+    });
+
+    document.getElementById('btnSubmitAntiDt').addEventListener('click', async () => {
+        const btn = document.getElementById('btnSubmitAntiDt');
+        const overlayTitle = document.getElementById('antiDtOverlayTitleInput').value.trim();
+        const overlayMessage = document.getElementById('antiDtOverlayMessageInput').value.trim();
+        const consoleWarningTitle = document.getElementById('antiDtConsoleTitleInput').value.trim();
+        const consoleWarningMessage = document.getElementById('antiDtConsoleMessageInput').value.trim();
+        btn.disabled = true; btn.textContent = 'Menyimpan...';
+        try {
+            const update = {};
+            if (overlayTitle) update.overlayTitle = overlayTitle;
+            if (overlayMessage) update.overlayMessage = overlayMessage;
+            if (consoleWarningTitle) update.consoleWarningTitle = consoleWarningTitle;
+            if (consoleWarningMessage) update.consoleWarningMessage = consoleWarningMessage;
+            await withTimeout(
+                setDoc(doc(db, 'settings', 'antiDevtools'), update, { merge: true }),
+                15000, 'Simpan ke database'
+            );
+            alert('Teks peringatan Anti-DevTools berhasil disimpan.');
+        } catch (e) {
+            alert('Gagal menyimpan: ' + (e && e.message ? e.message : e));
+        } finally {
+            btn.disabled = false; btn.textContent = 'Simpan Perubahan';
+        }
     });
 
     document.getElementById('btnSubmitProfil').addEventListener('click', async () => {
