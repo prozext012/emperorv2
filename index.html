@@ -831,25 +831,23 @@
         return data.secure_url;
     }
 
-    // Upload gambar (produk, QRIS, testimoni, notifikasi, status, profil) pakai ImgBB —
-    // pindah dari Cloudinary karena akun Cloudinary sering kena limit/gangguan.
-    // Video status TETAP pakai Cloudinary di atas (ImgBB tidak mendukung video).
-    const IMGBB_API_KEY = 'fb4cab6d50e0253e666ac90c4a586f6f';
-    async function uploadImageToImgbb(blob) {
+    // Upload gambar (produk, QRIS, testimoni, notifikasi, status, profil) juga ke Cloudinary —
+    // sebelumnya disimpan sebagai base64 langsung di Firestore, bikin dokumen berat & sinkron lambat.
+    async function uploadImageToCloudinary(blob) {
         const formData = new FormData();
-        formData.append('image', blob);
-        const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+        formData.append('file', blob);
+        formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+        const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, {
             method: 'POST',
             body: formData
         });
         if (!res.ok) {
-            let errMsg = 'Upload gambar ke ImgBB gagal.';
+            let errMsg = 'Upload gambar ke Cloudinary gagal.';
             try { const errData = await res.json(); if (errData.error && errData.error.message) errMsg = errData.error.message; } catch (e) {}
             throw new Error(errMsg);
         }
         const data = await res.json();
-        if (!data.success) throw new Error('Upload gambar ke ImgBB gagal.');
-        return data.data.url;
+        return data.secure_url;
     }
 
     const firebaseConfig = {
@@ -1062,7 +1060,7 @@
         try {
             const resized = await withTimeout(fileToCompressedBase64(file), 20000, 'Proses gambar');
             const watermarked = await applyWatermark(resized);
-            testiImgBase64 = await withTimeout(uploadImageToImgbb(dataUrlToBlob(watermarked)), 20000, 'Upload gambar');
+            testiImgBase64 = await withTimeout(uploadImageToCloudinary(dataUrlToBlob(watermarked)), 20000, 'Upload gambar');
             preview.src = testiImgBase64;
             preview.style.display = 'block';
         } catch (err) {
@@ -1606,17 +1604,17 @@
         ]);
     }
 
-    // ===== MIGRASI GAMBAR LAMA (base64) KE IMGBB, SEKALI JALAN =====
+    // ===== MIGRASI GAMBAR LAMA (base64) KE CLOUDINARY, SEKALI JALAN =====
     // Perbaikan upload gambar sebelumnya cuma berlaku buat UPLOAD BARU. Data yang udah kepalanjur
     // tersimpan sebagai base64 sebelum ini (produk, testimoni, notifikasi, foto profil) gak
     // otomatis ikut pindah -- makanya perlu tombol ini buat beresin yang lama sekali jalan.
     function isBase64Image(v) { return typeof v === 'string' && v.startsWith('data:image'); }
     async function migrateVal(v) {
         if (!isBase64Image(v)) return v;
-        return uploadImageToImgbb(dataUrlToBlob(v));
+        return uploadImageToCloudinary(dataUrlToBlob(v));
     }
     document.getElementById('btnMigrasiGambar').addEventListener('click', async () => {
-        if (!confirm('Ini akan mengunggah semua gambar lama (base64) di produk, testimoni, notifikasi, dan foto profil ke ImgBB, lalu menggantinya jadi link. Proses bisa makan waktu beberapa menit tergantung jumlah data. Lanjutkan?')) return;
+        if (!confirm('Ini akan mengunggah semua gambar lama (base64) di produk, testimoni, notifikasi, dan foto profil ke Cloudinary, lalu menggantinya jadi link. Proses bisa makan waktu beberapa menit tergantung jumlah data. Lanjutkan?')) return;
         const btn = document.getElementById('btnMigrasiGambar');
         const log = document.getElementById('migrasiGambarLog');
         btn.disabled = true; btn.textContent = 'Migrasi berjalan...';
@@ -1746,7 +1744,7 @@
     async function fileToBase64IfAny(file) {
         if (!file) return '';
         const dataUrl = await withTimeout(fileToCompressedBase64(file), 20000, 'Proses gambar');
-        return withTimeout(uploadImageToImgbb(dataUrlToBlob(dataUrl)), 20000, 'Upload gambar');
+        return withTimeout(uploadImageToCloudinary(dataUrlToBlob(dataUrl)), 20000, 'Upload gambar');
     }
 
     function formatWaktu(ts) {
@@ -1968,7 +1966,7 @@
                 try {
                     const resized = await withTimeout(fileToCompressedBase64(file), 20000, 'Proses gambar');
                     const watermarked = await applyWatermark(resized);
-                    const url = await withTimeout(uploadImageToImgbb(dataUrlToBlob(watermarked)), 20000, 'Upload gambar');
+                    const url = await withTimeout(uploadImageToCloudinary(dataUrlToBlob(watermarked)), 20000, 'Upload gambar');
                     await updateDoc(doc(db, 'testimoni', docSnap.id), { img: url });
                 } catch (e) {
                     alert('Gagal mengganti foto: ' + e.message);
