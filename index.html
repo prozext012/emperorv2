@@ -944,6 +944,19 @@
     // supaya tidak ada request Firestore yang dikirim dari sesi yang belum terautentikasi.
     function initAdminApp() {
 
+    // ===== SINKRON productMeta (dipakai dropdown "Nama Produk" di tab Testimoni) =====
+    // Sebelumnya ditulis dari web utama (public, tanpa login), tapi sejak Firestore Rules
+    // dikunci supaya nulis produkMeta wajib login admin, jadi dipindah ke sini.
+    const PRODUCT_LIST_META = [
+        { id: 1, key: 'apk-jam', name: 'APK Widget Jam' },
+        { id: 2, key: 'ig', name: 'Followers IG' },
+        { id: 3, key: 'ebook', name: '2.000+ Buku Digital Premium' },
+        { id: 4, key: 'tiktok', name: 'Followers TikTok' }
+    ];
+    PRODUCT_LIST_META.forEach(p => {
+        setDoc(doc(db, 'productMeta', String(p.id)), p).catch((e) => console.warn('Gagal sinkron productMeta:', e));
+    });
+
     // ===== AUTO-CLEANUP HARIAN (sama seperti di firabase.js sisi web utama) =====
     // Admin biasanya jarang dibuka dibanding web utama, jadi ini pelengkap aja — cleanup
     // utama tetap jalan dari kunjungan pengunjung. Data lama dihapus PERMANEN dari Firestore.
